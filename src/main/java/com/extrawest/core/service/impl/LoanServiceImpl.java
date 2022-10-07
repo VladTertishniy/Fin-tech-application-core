@@ -1,9 +1,12 @@
 package com.extrawest.core.service.impl;
 
+import com.extrawest.core.exception.ApiRequestException;
+import com.extrawest.core.exception.ExceptionMessage;
 import com.extrawest.core.feignClient.OperatorFeignClient;
 import com.extrawest.core.feignClient.SellPointFeignClient;
 import com.extrawest.core.model.ApplicationForm;
 import com.extrawest.core.model.Loan;
+import com.extrawest.core.model.LoanBankRequest;
 import com.extrawest.core.model.Status;
 import com.extrawest.core.model.dto.request.LoanRequestDto;
 import com.extrawest.core.model.dto.response.DeleteResponseDto;
@@ -12,12 +15,18 @@ import com.extrawest.core.model.dto.response.OperatorResponseDto;
 import com.extrawest.core.model.dto.response.SellPointResponseDto;
 import com.extrawest.core.model.mapper.LoanMapper;
 import com.extrawest.core.repository.ApplicationFormRepository;
+import com.extrawest.core.repository.LoanBankRequestRepository;
 import com.extrawest.core.repository.LoanRepository;
+import com.extrawest.core.service.BankProcessService;
 import com.extrawest.core.service.LoanService;
+import feign.FeignException;
 import lombok.AllArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import javax.annotation.PostConstruct;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
@@ -30,6 +39,9 @@ public class LoanServiceImpl implements LoanService {
     private ApplicationFormRepository applicationFormRepository;
     private OperatorFeignClient operatorFeignClient;
     private SellPointFeignClient sellPointFeignClient;
+    private LoanBankRequestRepository loanBankRequestRepository;
+    @Autowired
+    private List<BankProcessService> list;
 
     @Override
     public LoanResponseDto create(LoanRequestDto loanRequestDto) {
@@ -72,10 +84,27 @@ public class LoanServiceImpl implements LoanService {
         if (loan.isEmpty()) {
             throw new NoSuchElementException("Loan with id: " + loanId + " not found");
         }
+        try {
+            for (BankProcessService service:list) {
+                if (!service.send(loan.get().getApplicationForm()).is2xxSuccessful()) {
+                    throw new ApiRequestException(ExceptionMessage.BANK_DONT_ACCEPT_REQUEST);
+                }
+                LoanBankRequest loanBankRequest = new LoanBankRequest();
+                loanBankRequest.setLoanId(loanId);
+                loanBankRequest.setBankName(service.getBankName());
+                loanBankRequest.setLoanAmount(loan.get().getLoanAmount());
+                loanBankRequest.setIncome(loan.get().getIncome());
+                loanBankRequest.setOperatorId(loan.get().getOperatorId());
+                loanBankRequest.setSalePointId(loan.get().getSalePointId());
+                loanBankRequestRepository.save(loanBankRequest);
+            }
+        } catch (FeignException e) {
+            throw new ApiRequestException(ExceptionMessage.BAD_FEIGN_REQUEST);
+        }
+
         loan.get().setStatus(Status.SENT_TO_BANK);
         loan.get().setUpdatedWhen(LocalDateTime.now());
-        loanRepository.save(loan.get());
-        return null;
+        return loanMapper.toDto(loanRepository.save(loan.get()));
     }
 
     private ApplicationForm getApplicationForm(Long applicationFormId) {
