@@ -13,4 +13,8 @@ public class ApiRequestException extends RuntimeException {
     public ApiRequestException(ExceptionMessage message, String email) {
         super(message.getExMessage());
     }
+
+    public ApiRequestException(String message) {
+        super(message);
+    }
 }
