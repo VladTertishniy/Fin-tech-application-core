@@ -4,10 +4,7 @@ import com.extrawest.core.exception.ApiRequestException;
 import com.extrawest.core.exception.ExceptionMessage;
 import com.extrawest.core.feignClient.OperatorFeignClient;
 import com.extrawest.core.feignClient.SellPointFeignClient;
-import com.extrawest.core.model.ApplicationForm;
-import com.extrawest.core.model.Loan;
-import com.extrawest.core.model.LoanBankRequest;
-import com.extrawest.core.model.Status;
+import com.extrawest.core.model.*;
 import com.extrawest.core.model.dto.request.LoanRequestDto;
 import com.extrawest.core.model.dto.response.DeleteResponseDto;
 import com.extrawest.core.model.dto.response.LoanResponseDto;
@@ -15,20 +12,23 @@ import com.extrawest.core.model.dto.response.OperatorResponseDto;
 import com.extrawest.core.model.dto.response.SellPointResponseDto;
 import com.extrawest.core.model.mapper.LoanMapper;
 import com.extrawest.core.repository.ApplicationFormRepository;
+import com.extrawest.core.repository.BankRequestRepository;
 import com.extrawest.core.repository.LoanBankRequestRepository;
 import com.extrawest.core.repository.LoanRepository;
 import com.extrawest.core.service.BankProcessService;
 import com.extrawest.core.service.LoanService;
 import feign.FeignException;
 import lombok.AllArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.PostConstruct;
 import java.time.LocalDateTime;
+import java.util.Date;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.Optional;
 
 @Service
 @AllArgsConstructor
@@ -40,35 +40,41 @@ public class LoanServiceImpl implements LoanService {
     private OperatorFeignClient operatorFeignClient;
     private SellPointFeignClient sellPointFeignClient;
     private LoanBankRequestRepository loanBankRequestRepository;
+    private BankRequestRepository bankRequestRepository;
+    private final ThreadPoolTaskScheduler scheduler;
+    private static final Logger LOGGER = LoggerFactory.getLogger(LoanServiceImpl.class);
     @Autowired
-    private List<BankProcessService> list;
+    private List<BankProcessService> bankProcessServiceList;
 
     @Override
     public LoanResponseDto create(LoanRequestDto loanRequestDto) {
-        Loan loan = loanMapper.toModel(loanRequestDto);
-        ApplicationForm applicationForm = getApplicationForm(loanRequestDto.getApplicationFormId());
         long operatorId = loanRequestDto.getOperatorId();
         long sellPointId = loanRequestDto.getSalePointId();
         OperatorResponseDto operatorResponseDto = operatorFeignClient.getOperator(operatorId).getBody();
         SellPointResponseDto sellPointResponseDto = sellPointFeignClient.getSellPoint(loanRequestDto.getSalePointId()).getBody();
-        if (operatorResponseDto != null) {
-            loan.setOperatorId(operatorId);
-        } else throw new NoSuchElementException("Operator with id " + operatorId + " not found");
+        if (!onCreateUpdateValidation(loanRequestDto, operatorResponseDto)) throw new ApiRequestException("Bad loan request");
+        Loan loan = loanMapper.toModel(loanRequestDto);
+        ApplicationForm applicationForm = getApplicationForm(loanRequestDto.getApplicationFormId());
+        loan.setOperatorId(operatorId);
         if (sellPointResponseDto != null) {
             loan.setSalePointId(sellPointId);
         } else throw new NoSuchElementException("Sale point with id " + sellPointId + " not found");
         loan.setApplicationForm(applicationForm);
         loan.setCreatedWhen(LocalDateTime.now());
-        loan.setStatus(Status.DRAFT);
+        loan.setLoanStatus(LoanStatus.DRAFT);
         return loanMapper.toDto(loanRepository.save(loan));
     }
 
     @Override
     public LoanResponseDto update(LoanRequestDto loanRequestDto, Long loanId) {
+        long operatorId = loanRequestDto.getOperatorId();
+        OperatorResponseDto operatorResponseDto = operatorFeignClient.getOperator(operatorId).getBody();
+        if (!onCreateUpdateValidation(loanRequestDto, operatorResponseDto)) throw new ApiRequestException("Bad loan request");
         Loan loan = loanMapper.toModel(loanRequestDto);
         loan.setId(loanId);
         loan.setApplicationForm(getApplicationForm(loanRequestDto.getApplicationFormId()));
         loan.setUpdatedWhen(LocalDateTime.now());
+        loan.setSalePointId(loanRequestDto.getSalePointId());
         return loanMapper.toDto(loanRepository.save(loan));
     }
 
@@ -80,36 +86,67 @@ public class LoanServiceImpl implements LoanService {
 
     @Override
     public LoanResponseDto accept(Long loanId) {
-        Optional<Loan> loan = loanRepository.findById(loanId);
-        if (loan.isEmpty()) {
-            throw new NoSuchElementException("Loan with id: " + loanId + " not found");
-        }
+        Loan loan = getLoanById(loanId);
         try {
-            for (BankProcessService service:list) {
-                if (!service.send(loan.get().getApplicationForm()).is2xxSuccessful()) {
-                    throw new ApiRequestException(ExceptionMessage.BANK_DONT_ACCEPT_REQUEST);
-                }
-                LoanBankRequest loanBankRequest = new LoanBankRequest();
-                loanBankRequest.setLoanId(loanId);
-                loanBankRequest.setBankName(service.getBankName());
-                loanBankRequest.setLoanAmount(loan.get().getLoanAmount());
-                loanBankRequest.setIncome(loan.get().getIncome());
-                loanBankRequest.setOperatorId(loan.get().getOperatorId());
-                loanBankRequest.setSalePointId(loan.get().getSalePointId());
-                loanBankRequestRepository.save(loanBankRequest);
+            for (BankProcessService service: bankProcessServiceList) {
+                BankRequest bankRequest = new BankRequest();
+                bankRequest.setStatus(BankRequestStatus.AWAITING_SEND);
+                bankRequest.setDateOfDispatch(new Date(System.currentTimeMillis() + 1200L));
+                bankRequest.setBankName(service.getBankName());
+                bankRequestRepository.save(bankRequest);
+                SendingBankRequestTask task = new SendingBankRequestTask(
+                        service,
+                        bankRequest.getDateOfDispatch(),
+                        bankRequest,
+                        loan.getApplicationForm(),
+                        bankRequestRepository
+                );
+                saveLoanBankRequest(loan, service.getBankName());
+                scheduleBankRequestTask(task);
             }
         } catch (FeignException e) {
             throw new ApiRequestException(ExceptionMessage.BAD_FEIGN_REQUEST);
         }
 
-        loan.get().setStatus(Status.SENT_TO_BANK);
-        loan.get().setUpdatedWhen(LocalDateTime.now());
-        return loanMapper.toDto(loanRepository.save(loan.get()));
+        loan.setLoanStatus(LoanStatus.SENT_TO_BANK);
+        loan.setUpdatedWhen(LocalDateTime.now());
+        return loanMapper.toDto(loanRepository.save(loan));
+    }
+
+    private void saveLoanBankRequest(Loan loan, BankNames bankName) {
+        LoanBankRequest loanBankRequest = new LoanBankRequest();
+        loanBankRequest.setLoan(loan);
+        loanBankRequest.setBankName(bankName);
+        loanBankRequest.setLoanAmount(loan.getLoanAmount());
+        loanBankRequest.setIncome(loan.getIncome());
+        loanBankRequest.setOperatorId(loan.getOperatorId());
+        loanBankRequest.setSalePointId(loan.getSalePointId());
+        loanBankRequestRepository.save(loanBankRequest);
     }
 
     private ApplicationForm getApplicationForm(Long applicationFormId) {
         return applicationFormRepository
                 .findById(applicationFormId)
-                .orElseThrow(() -> new NoSuchElementException("Application form with id: " + applicationFormId + " not found"));
+                .orElseThrow(() -> new NoSuchElementException(
+                        "Application form with id: " + applicationFormId + " not found")
+                );
+    }
+
+    public void scheduleBankRequestTask(SendingBankRequestTask task) {
+        scheduler.schedule(task, task.getStartDate());
+        LOGGER.info(String.format("SendingBankRequestTask successfully added. Task will be run at %s%n", task.getStartDate()));
+    }
+
+    private Loan getLoanById(long id) {
+        return loanRepository.findById(id).orElseThrow(
+                () -> new NoSuchElementException("Loan with id: " + id + " not found")
+        );
+    }
+
+    private boolean onCreateUpdateValidation(LoanRequestDto loanRequestDto, OperatorResponseDto operatorResponseDto) {
+        if (operatorResponseDto == null) return false;
+        if (!(loanRequestDto.getOperatorId() == operatorResponseDto.getId())) return false;
+        if (!(loanRequestDto.getSalePointId() == operatorResponseDto.getSellPointIdentifier())) return false;
+        return true;
     }
 }
