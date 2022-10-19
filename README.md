@@ -26,7 +26,7 @@
 
 ## Features
 This service based on Spring Boot 2.7.4 and java 17. 
-Use Feign Client for integration with other services, AWS RDS as DB, Hibernate as ORM, Lombok annotations, Mapstruct for entity mapping
+Use Feign Client for integration with other services, AWS RDS as DB, Hibernate as ORM, Lombok annotations, Mapstruct for entity mapping and eureka
 
 
 ## Requirements
