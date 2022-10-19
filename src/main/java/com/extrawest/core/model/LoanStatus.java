@@ -1,6 +1,6 @@
 package com.extrawest.core.model;
 
-public enum Status {
+public enum LoanStatus {
     DRAFT,
     SENT_TO_BANK
 }
