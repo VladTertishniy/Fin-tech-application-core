@@ -5,10 +5,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import lombok.ToString;
 
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
+import javax.persistence.*;
 
 @Entity(name = "loanRequests")
 @Getter
@@ -23,7 +20,8 @@ public class LoanBankRequest {
     private long operatorId;
     private long income;
     private long loanAmount;
-    private long LoanId;
+    @ManyToOne
+    private Loan loan;
     private BankNames bankName;
 
 }

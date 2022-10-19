@@ -7,7 +7,6 @@ import lombok.ToString;
 
 import javax.persistence.*;
 import java.time.LocalDateTime;
-import java.time.Period;
 
 @Entity(name = "loans")
 @Getter
@@ -20,11 +19,11 @@ public class Loan {
     private long id;
     private LocalDateTime createdWhen;
     private LocalDateTime updatedWhen;
-    private Status status;
+    private LoanStatus loanStatus;
+    @Enumerated(EnumType.STRING)
     private SaleType saleType;
     private long salePointId;
     private long operatorId;
-    private long buyerId;
     @ManyToOne
     @JoinColumn(name = "application_form_id", nullable = false)
     private ApplicationForm applicationForm;
@@ -32,5 +31,5 @@ public class Loan {
     private long loanAmount;
     private LocalDateTime loanTermFrom;
     private LocalDateTime loanTermTo;
-    private long commission;
+    private double commission;
 }
