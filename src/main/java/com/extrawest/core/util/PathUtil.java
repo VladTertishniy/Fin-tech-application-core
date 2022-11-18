@@ -10,4 +10,6 @@ public class PathUtil {
     public static final String UPDATE_PATH = "/update/{id}";
     public static final String DELETE_PATH = "/delete/{id}";
     public static final String ACCEPT_PATH = "/accept/{id}";
+    public static final String BANK_REQUEST_ID_KEY = "BANK_REQUEST_ID";
+    public static final String APPLICATION_FORM_ID_KEY = "APPLICATION_FORM_ID";
 }

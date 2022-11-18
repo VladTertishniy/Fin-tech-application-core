@@ -15,14 +15,12 @@ import com.extrawest.core.repository.ApplicationFormRepository;
 import com.extrawest.core.repository.BankRequestRepository;
 import com.extrawest.core.repository.LoanBankRequestRepository;
 import com.extrawest.core.repository.LoanRepository;
+import com.extrawest.core.schedule.SendingBankRequestTask;
 import com.extrawest.core.service.BankProcessService;
 import com.extrawest.core.service.LoanService;
 import feign.FeignException;
 import lombok.AllArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -41,8 +39,9 @@ public class LoanServiceImpl implements LoanService {
     private SellPointFeignClient sellPointFeignClient;
     private LoanBankRequestRepository loanBankRequestRepository;
     private BankRequestRepository bankRequestRepository;
-    private final ThreadPoolTaskScheduler scheduler;
-    private static final Logger LOGGER = LoggerFactory.getLogger(LoanServiceImpl.class);
+
+    private SchedulerServiceImpl schedulerService;
+
     @Autowired
     private List<BankProcessService> bankProcessServiceList;
 
@@ -94,15 +93,9 @@ public class LoanServiceImpl implements LoanService {
                 bankRequest.setDateOfDispatch(new Date(System.currentTimeMillis() + 1200L));
                 bankRequest.setBankName(service.getBankName());
                 bankRequestRepository.save(bankRequest);
-                SendingBankRequestTask task = new SendingBankRequestTask(
-                        service,
-                        bankRequest.getDateOfDispatch(),
-                        bankRequest,
-                        loan.getApplicationForm(),
-                        bankRequestRepository
-                );
+                SendingBankRequestTask task = new SendingBankRequestTask(bankRequest.getId(), loan.getApplicationForm().getId());
+                schedulerService.addTask(task);
                 saveLoanBankRequest(loan, service.getBankName());
-                scheduleBankRequestTask(task);
             }
         } catch (FeignException e) {
             throw new ApiRequestException(ExceptionMessage.BAD_FEIGN_REQUEST);
@@ -130,11 +123,6 @@ public class LoanServiceImpl implements LoanService {
                 .orElseThrow(() -> new NoSuchElementException(
                         "Application form with id: " + applicationFormId + " not found")
                 );
-    }
-
-    public void scheduleBankRequestTask(SendingBankRequestTask task) {
-        scheduler.schedule(task, task.getStartDate());
-        LOGGER.info(String.format("SendingBankRequestTask successfully added. Task will be run at %s%n", task.getStartDate()));
     }
 
     private Loan getLoanById(long id) {

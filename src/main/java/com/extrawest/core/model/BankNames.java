@@ -6,7 +6,7 @@ import lombok.Getter;
 @Getter
 @AllArgsConstructor
 public enum BankNames {
-    INDEX_BANK("Index bank");
+    INDEX_BANK("INDEX_BANK");
 
     private final String bankName;
 }

@@ -5,11 +5,13 @@ import com.extrawest.core.model.ApplicationForm;
 import com.extrawest.core.model.BankNames;
 import com.extrawest.core.service.BankProcessService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
+@Qualifier(value = "INDEX_BANK")
 public class IndexBankProcessServiceImpl implements BankProcessService {
 
     private final IndexBankFeignClient indexBankFeignClient;
